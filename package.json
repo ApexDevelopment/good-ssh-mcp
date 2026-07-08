@@ -1,0 +1,35 @@
+{
+  "name": "good-ssh-mcp",
+  "version": "1.0.0",
+  "description": "Stateful SSH management for MCP and CLI agents",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "good-ssh": "./dist/cli/index.js",
+    "good-ssh-mcp": "./dist/mcp/index.js",
+    "good-ssh-daemon": "./dist/daemon/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "watch": "tsc -w",
+    "start:daemon": "tsx src/daemon/index.ts",
+    "start:mcp": "tsx src/mcp/index.ts",
+    "start:cli": "tsx src/cli/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.4.0",
+    "commander": "^12.1.0",
+    "ssh2": "^1.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/ssh2": "^1.15.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}
