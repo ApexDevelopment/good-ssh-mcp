@@ -7,28 +7,35 @@ description: Installs, configures, and uses the stateful Good SSH MCP server and
 
 Managing remote machines via SSH can be error-prone for AI agents due to quoting hassles, escaping issues, shell character limits, and the overhead of constantly reconnecting. This tool solves those issues by running a local background daemon that keeps SSH sessions alive statefully, resolves paths, and exposes simple, agent-friendly tools.
 
+## Key Features
+
+* **Stateful Sessions**: Reuses active background SSH connections, avoiding reconnect overhead.
+* **Stateful Working Directory**: Tracks and maintains your current directory (`cwd`) across command executions without requiring chained `cd` statements.
+* **Respects `~/.ssh/config` & SSH Agent**: Automatically parses your `~/.ssh/config` file to resolve host aliases, default usernames, custom ports, and `IdentityFile` paths, falling back to your local `ssh-agent` automatically for keyless login.
+* **Quoting-Safe File Handling**: Reads and writes files directly via SFTP, avoiding terminal quote escaping, shell limits, and character encoding issues.
+
 ## Installation & Setup
 
 You can run or install `good-ssh-mcp` using any of the following methods:
 
 ### Method 1: Direct Global Installation (Recommended)
-Install the CLI and MCP binaries globally straight from the GitHub repository:
+Install the CLI and MCP binaries globally straight from the GitHub tarball archive (bypasses any local git configuration clashes in npm):
 ```bash
-npm install -g github:ApexDevelopment/good-ssh-mcp
+npm install -g https://github.com/ApexDevelopment/good-ssh-mcp/archive/refs/heads/main.tar.gz
 ```
 This registers `good-ssh` (CLI), `good-ssh-mcp` (MCP Server), and `good-ssh-daemon` (Background daemon) globally on your local PATH.
 
 ### Method 2: On-the-Fly Execution via `npx` (Zero-Installation)
-Execute command line commands or configure the MCP server dynamically without global installation:
+Execute command line commands or configure the MCP server dynamically without permanent global installation:
 * **Running the CLI**:
   ```bash
-  npx -y github:ApexDevelopment/good-ssh-mcp connect <host>
+  npx -y https://github.com/ApexDevelopment/good-ssh-mcp/archive/refs/heads/main.tar.gz connect <host>
   ```
 * **For MCP server configuration** (Use this command directly inside Cursor/Claude Desktop settings):
   ```json
   "good-ssh-mcp": {
     "command": "npx",
-    "args": ["-y", "github:ApexDevelopment/good-ssh-mcp"]
+    "args": ["-y", "https://github.com/ApexDevelopment/good-ssh-mcp/archive/refs/heads/main.tar.gz"]
   }
   ```
 
