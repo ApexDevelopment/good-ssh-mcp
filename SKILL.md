@@ -146,21 +146,29 @@ Updates the active execution shell for a connection.
   - `connectionId` (string, required)
   - `shell` (string, required): Target shell (e.g. `powershell`, `cmd`, `/bin/bash`, `/bin/zsh`, `/usr/bin/pwsh`).
 
-### 7. `ssh_get_file_contents` / `ssh_write_file_contents`
+### 7. `ssh_run_script`
+Writes a script to a temporary file via SFTP, executes it using the specified interpreter, and deletes it. This is **strongly recommended** for running Python code, complex shell scripts, or any commands with nested quotes to completely bypass quoting/escaping issues.
+- **Arguments**:
+  - `connectionId` (string, required)
+  - `script` (string, required): Raw text content of the script.
+  - `extension` (string, required): Script file extension (e.g., `.py`, `.ps1`, `.sh`, `.bat`).
+  - `interpreter` (string, optional): Interpreter command to run the script (e.g. `python`, `powershell`, `bash`). If omitted, the file is executed directly.
+
+### 8. `ssh_get_file_contents` / `ssh_write_file_contents`
 Directly read/write files via SFTP to avoid terminal quoting issues.
 - **Arguments**:
   - `connectionId` (string, required)
   - `remotePath` (string, required)
   - `content` (string, required, only for `ssh_write_file_contents`)
 
-### 8. `ssh_upload_file` / `ssh_download_file`
+### 9. `ssh_upload_file` / `ssh_download_file`
 Upload/download single files.
 - **Arguments**:
   - `connectionId` (string, required)
   - `localPath` (string, required)
   - `remotePath` (string, required)
 
-### 9. `ssh_upload_directory` / `ssh_download_directory`
+### 10. `ssh_upload_directory` / `ssh_download_directory`
 Recursively transfer directories.
 - **Arguments**:
   - `connectionId` (string, required)
@@ -188,6 +196,12 @@ good-ssh cd my-server /var/log
 
 # Change active shell statefully
 good-ssh shell my-server powershell
+
+# Upload and run a local script remotely (extension inferred from filename)
+good-ssh run my-server ./test.py --interpreter python
+
+# Pipe script contents directly from stdin (extension required)
+echo "import sys; print(sys.version)" | good-ssh run my-server - --extension .py --interpreter python
 
 # Read a remote file
 good-ssh cat my-server /var/log/nginx/error.log

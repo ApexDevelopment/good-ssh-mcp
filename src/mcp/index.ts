@@ -100,6 +100,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         }
       },
       {
+        name: "ssh_run_script",
+        description: "Write and execute a script on the remote machine. This is the recommended way to run Python code, complex shell scripts, or any commands with nested quotes, as it writes the script directly to a file via SFTP and runs it, avoiding all terminal quoting and escaping issues.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            connectionId: { type: "string", description: "The ID/tag of the connection." },
+            script: { type: "string", description: "The raw text content of the script to execute." },
+            extension: { type: "string", description: "The file extension to use (including the dot, e.g. '.py', '.ps1', '.sh', '.bat')." },
+            interpreter: { type: "string", description: "Optional interpreter command to run the script (e.g. 'python', 'bash', 'powershell'). If omitted, the script is run directly." }
+          },
+          required: ["connectionId", "script", "extension"]
+        }
+      },
+      {
         name: "ssh_get_file_contents",
         description: "Directly read the text contents of a file on the remote machine via SFTP (avoids shell quote escaping issues).",
         inputSchema: {
@@ -224,6 +238,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const res = await callDaemon("/shell", args);
         return {
           content: [{ type: "text", text: `Active shell updated to: ${res.shell}` }]
+        };
+      }
+      case "ssh_run_script": {
+        const res = await callDaemon("/run-script", args);
+        return {
+          content: [{ type: "text", text: JSON.stringify(res, null, 2) }]
         };
       }
       case "ssh_get_file_contents": {

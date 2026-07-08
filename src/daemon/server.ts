@@ -147,6 +147,20 @@ export class DaemonServer {
               this.sendJson(res, 200, { shell: newShell });
               break;
             }
+            case '/run-script': {
+              if (!body.connectionId || !body.script || !body.extension) {
+                this.sendError(res, 400, 'Missing required fields: connectionId, script, or extension');
+                break;
+              }
+              const result = await this.manager.runScript(
+                body.connectionId,
+                body.script,
+                body.extension,
+                body.interpreter
+              );
+              this.sendJson(res, 200, result);
+              break;
+            }
             case '/upload-file': {
               if (!body.connectionId || !body.localPath || !body.remotePath) {
                 this.sendError(res, 400, 'Missing required fields');

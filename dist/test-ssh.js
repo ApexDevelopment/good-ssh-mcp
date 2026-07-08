@@ -68,7 +68,8 @@ async function main() {
         console.log('\n--- 2. Testing Connection Listing ---');
         const list = await callDaemon('/connections');
         console.log('Active connections:', list);
-        if (list.length !== 1 || list[0].id !== 'test-local') {
+        const hasLocal = list.some((c) => c.id === 'test-local');
+        if (!hasLocal) {
             throw new Error('Connection listing assertion failed!');
         }
         console.log('\n--- 3. Testing Command Execution ---');
@@ -90,8 +91,9 @@ async function main() {
             throw new Error('Directory change assertion failed!');
         }
         const listAfterCd = await callDaemon('/connections');
-        console.log('Connection CWD after change:', listAfterCd[0].cwd);
-        if (listAfterCd[0].cwd !== '/home/test/sub') {
+        const connAfterCd = listAfterCd.find((c) => c.id === 'test-local');
+        console.log('Connection CWD after change:', connAfterCd?.cwd);
+        if (!connAfterCd || connAfterCd.cwd !== '/home/test/sub') {
             throw new Error('Stateful CWD update verify failed!');
         }
         console.log('\n--- 4.5. Testing Shell Switching ---');
@@ -104,27 +106,37 @@ async function main() {
             throw new Error('Shell switch assertion failed!');
         }
         const listAfterShell = await callDaemon('/connections');
-        console.log('Connection shell after change:', listAfterShell[0].shell);
-        if (listAfterShell[0].shell !== '/bin/sh') {
+        const connAfterShell = listAfterShell.find((c) => c.id === 'test-local');
+        console.log('Connection shell after change:', connAfterShell?.shell);
+        if (!connAfterShell || connAfterShell.shell !== '/bin/sh') {
             throw new Error('Stateful shell update verify failed!');
         }
         console.log('\n--- 5. Testing Disconnection ---');
         await callDaemon('/disconnect', { connectionId: 'test-local' });
         console.log('Disconnected.');
         const listFinal = await callDaemon('/connections');
-        console.log('Final connections (should be empty):', listFinal);
-        if (listFinal.length !== 0) {
+        console.log('Final connections (should not contain test-local):', listFinal);
+        const hasLocalFinal = listFinal.some((c) => c.id === 'test-local');
+        if (hasLocalFinal) {
             throw new Error('Disconnection verify failed!');
         }
         console.log('\n--- 6. Testing Daemon Shutdown ---');
-        await callDaemon('/shutdown', undefined, 'POST');
-        console.log('Daemon shut down.');
+        if (listFinal.length > 0) {
+            console.log('Skipping daemon shutdown test because other active connections are present:', listFinal);
+        }
+        else {
+            await callDaemon('/shutdown', undefined, 'POST');
+            console.log('Daemon shut down.');
+        }
         console.log('\nAll tests passed successfully!');
     }
     catch (err) {
         console.error('\nTest failed with error:', err.message);
         try {
-            await callDaemon('/shutdown', undefined, 'POST');
+            const listFinal = await callDaemon('/connections').catch(() => []);
+            if (listFinal.length === 0) {
+                await callDaemon('/shutdown', undefined, 'POST');
+            }
         }
         catch { }
         process.exit(1);

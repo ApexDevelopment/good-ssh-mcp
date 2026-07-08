@@ -3,6 +3,7 @@ import type { SFTPWrapper, ConnectConfig, Client } from 'ssh2';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import { ConnectionInfo, CommandResult } from '../shared/types.js';
 
 export interface ActiveConnection {
@@ -473,6 +474,58 @@ export class SSHConnectionManager {
     return this.resolveRemoteAbsolutePath(id, dirPath, true);
   }
 
+  async runScript(
+    id: string,
+    script: string,
+    extension: string,
+    interpreter?: string
+  ): Promise<CommandResult> {
+    const conn = this.connections.get(id);
+    if (!conn) {
+      throw new Error(`Connection "${id}" not found.`);
+    }
+
+    const uuid = crypto.randomUUID();
+    const tempFileName = `.good_ssh_script_${uuid}${extension}`;
+    // Always use forward slashes for SFTP paths
+    const sftpCwd = conn.info.cwd.replace(/\\/g, '/');
+    const tempFilePath = `${sftpCwd}${sftpCwd.endsWith('/') ? '' : '/'}${tempFileName}`;
+
+    try {
+      // 1. Write script content to remote file
+      await this.writeFileContents(id, tempFilePath, script);
+
+      // 2. Build execution command
+      let cmd = '';
+      if (interpreter) {
+        cmd = `${interpreter} "${tempFilePath}"`;
+      } else {
+        if (conn.info.os === 'windows') {
+          cmd = `"${tempFilePath}"`;
+        } else {
+          cmd = `chmod +x "${tempFilePath}" && "${tempFilePath}"`;
+        }
+      }
+
+      // 3. Execute
+      const result = await this.execute(id, cmd);
+      return result;
+    } finally {
+      // 4. Clean up remote temp file
+      try {
+        const sftp = await getSftp(conn.client);
+        await new Promise<void>((resolve, reject) => {
+          sftp.unlink(tempFilePath, (err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+      } catch (err: any) {
+        console.error(`Failed to clean up remote temp file ${tempFilePath}:`, err.message);
+      }
+    }
+  }
+
   private async resolveRemoteAbsolutePath(id: string, remotePath: string, throwOnError = false): Promise<string> {
     const conn = this.connections.get(id);
     if (!conn) return remotePath;
@@ -529,10 +582,12 @@ export class SSHConnectionManager {
       });
       
       stream.on('end', () => {
+        sftp.end();
         resolve(Buffer.concat(chunks).toString('utf8'));
       });
       
       stream.on('error', (err: any) => {
+        sftp.end();
         reject(err);
       });
     });
@@ -545,14 +600,28 @@ export class SSHConnectionManager {
     const sftp = await getSftp(conn.client);
     
     return new Promise<void>((resolve, reject) => {
-      const stream = sftp.createWriteStream(remotePath, { encoding: 'utf8' });
+      // Normalize to forward slashes for SFTP path
+      const normalizedPath = remotePath.replace(/\\/g, '/');
+      const stream = sftp.createWriteStream(normalizedPath, { encoding: 'utf8' });
       
-      stream.on('finish', () => {
-        resolve();
-      });
+      let completed = false;
+      const done = () => {
+        if (!completed) {
+          completed = true;
+          sftp.end();
+          resolve();
+        }
+      };
+      
+      stream.on('finish', done);
+      stream.on('close', done);
       
       stream.on('error', (err: any) => {
-        reject(err);
+        if (!completed) {
+          completed = true;
+          sftp.end();
+          reject(err);
+        }
       });
       
       stream.write(content);
@@ -571,12 +640,16 @@ export class SSHConnectionManager {
     }
     resolvedLocal = path.resolve(resolvedLocal);
 
-    return new Promise<void>((resolve, reject) => {
-      sftp.fastPut(resolvedLocal, remotePath, (err) => {
-        if (err) reject(err);
-        else resolve();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        sftp.fastPut(resolvedLocal, remotePath, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
       });
-    });
+    } finally {
+      sftp.end();
+    }
   }
 
   async downloadFile(id: string, remotePath: string, localPath: string): Promise<void> {
@@ -592,12 +665,16 @@ export class SSHConnectionManager {
 
     await fs.mkdir(path.dirname(resolvedLocal), { recursive: true });
 
-    return new Promise<void>((resolve, reject) => {
-      sftp.fastGet(remotePath, resolvedLocal, (err) => {
-        if (err) reject(err);
-        else resolve();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        sftp.fastGet(remotePath, resolvedLocal, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
       });
-    });
+    } finally {
+      sftp.end();
+    }
   }
 
   async uploadDirectory(id: string, localPath: string, remotePath: string): Promise<void> {
@@ -637,7 +714,11 @@ export class SSHConnectionManager {
       }
     };
 
-    await helper(resolvedLocal, remotePath);
+    try {
+      await helper(resolvedLocal, remotePath);
+    } finally {
+      sftp.end();
+    }
   }
 
   async downloadDirectory(id: string, remotePath: string, localPath: string): Promise<void> {
@@ -683,6 +764,10 @@ export class SSHConnectionManager {
       }
     };
 
-    await helper(remotePath, resolvedLocal);
+    try {
+      await helper(remotePath, resolvedLocal);
+    } finally {
+      sftp.end();
+    }
   }
 }

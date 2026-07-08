@@ -2,6 +2,7 @@ import ssh2 from 'ssh2';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 function executeCommandPromise(conn, command, stdin) {
     return new Promise((resolve) => {
         conn.exec(command, (err, stream) => {
@@ -414,6 +415,54 @@ export class SSHConnectionManager {
         conn.info.lastUsedAt = new Date().toISOString();
         return this.resolveRemoteAbsolutePath(id, dirPath, true);
     }
+    async runScript(id, script, extension, interpreter) {
+        const conn = this.connections.get(id);
+        if (!conn) {
+            throw new Error(`Connection "${id}" not found.`);
+        }
+        const uuid = crypto.randomUUID();
+        const tempFileName = `.good_ssh_script_${uuid}${extension}`;
+        // Always use forward slashes for SFTP paths
+        const sftpCwd = conn.info.cwd.replace(/\\/g, '/');
+        const tempFilePath = `${sftpCwd}${sftpCwd.endsWith('/') ? '' : '/'}${tempFileName}`;
+        try {
+            // 1. Write script content to remote file
+            await this.writeFileContents(id, tempFilePath, script);
+            // 2. Build execution command
+            let cmd = '';
+            if (interpreter) {
+                cmd = `${interpreter} "${tempFilePath}"`;
+            }
+            else {
+                if (conn.info.os === 'windows') {
+                    cmd = `"${tempFilePath}"`;
+                }
+                else {
+                    cmd = `chmod +x "${tempFilePath}" && "${tempFilePath}"`;
+                }
+            }
+            // 3. Execute
+            const result = await this.execute(id, cmd);
+            return result;
+        }
+        finally {
+            // 4. Clean up remote temp file
+            try {
+                const sftp = await getSftp(conn.client);
+                await new Promise((resolve, reject) => {
+                    sftp.unlink(tempFilePath, (err) => {
+                        if (err)
+                            reject(err);
+                        else
+                            resolve();
+                    });
+                });
+            }
+            catch (err) {
+                console.error(`Failed to clean up remote temp file ${tempFilePath}:`, err.message);
+            }
+        }
+    }
     async resolveRemoteAbsolutePath(id, remotePath, throwOnError = false) {
         const conn = this.connections.get(id);
         if (!conn)
@@ -466,9 +515,11 @@ export class SSHConnectionManager {
                 chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
             });
             stream.on('end', () => {
+                sftp.end();
                 resolve(Buffer.concat(chunks).toString('utf8'));
             });
             stream.on('error', (err) => {
+                sftp.end();
                 reject(err);
             });
         });
@@ -479,12 +530,25 @@ export class SSHConnectionManager {
             throw new Error(`Connection "${id}" not found.`);
         const sftp = await getSftp(conn.client);
         return new Promise((resolve, reject) => {
-            const stream = sftp.createWriteStream(remotePath, { encoding: 'utf8' });
-            stream.on('finish', () => {
-                resolve();
-            });
+            // Normalize to forward slashes for SFTP path
+            const normalizedPath = remotePath.replace(/\\/g, '/');
+            const stream = sftp.createWriteStream(normalizedPath, { encoding: 'utf8' });
+            let completed = false;
+            const done = () => {
+                if (!completed) {
+                    completed = true;
+                    sftp.end();
+                    resolve();
+                }
+            };
+            stream.on('finish', done);
+            stream.on('close', done);
             stream.on('error', (err) => {
-                reject(err);
+                if (!completed) {
+                    completed = true;
+                    sftp.end();
+                    reject(err);
+                }
             });
             stream.write(content);
             stream.end();
@@ -500,14 +564,19 @@ export class SSHConnectionManager {
             resolvedLocal = path.join(os.homedir(), resolvedLocal.slice(1));
         }
         resolvedLocal = path.resolve(resolvedLocal);
-        return new Promise((resolve, reject) => {
-            sftp.fastPut(resolvedLocal, remotePath, (err) => {
-                if (err)
-                    reject(err);
-                else
-                    resolve();
+        try {
+            await new Promise((resolve, reject) => {
+                sftp.fastPut(resolvedLocal, remotePath, (err) => {
+                    if (err)
+                        reject(err);
+                    else
+                        resolve();
+                });
             });
-        });
+        }
+        finally {
+            sftp.end();
+        }
     }
     async downloadFile(id, remotePath, localPath) {
         const conn = this.connections.get(id);
@@ -520,14 +589,19 @@ export class SSHConnectionManager {
         }
         resolvedLocal = path.resolve(resolvedLocal);
         await fs.mkdir(path.dirname(resolvedLocal), { recursive: true });
-        return new Promise((resolve, reject) => {
-            sftp.fastGet(remotePath, resolvedLocal, (err) => {
-                if (err)
-                    reject(err);
-                else
-                    resolve();
+        try {
+            await new Promise((resolve, reject) => {
+                sftp.fastGet(remotePath, resolvedLocal, (err) => {
+                    if (err)
+                        reject(err);
+                    else
+                        resolve();
+                });
             });
-        });
+        }
+        finally {
+            sftp.end();
+        }
     }
     async uploadDirectory(id, localPath, remotePath) {
         const conn = this.connections.get(id);
@@ -565,7 +639,12 @@ export class SSHConnectionManager {
                 }
             }
         };
-        await helper(resolvedLocal, remotePath);
+        try {
+            await helper(resolvedLocal, remotePath);
+        }
+        finally {
+            sftp.end();
+        }
     }
     async downloadDirectory(id, remotePath, localPath) {
         const conn = this.connections.get(id);
@@ -609,6 +688,11 @@ export class SSHConnectionManager {
                 }
             }
         };
-        await helper(remotePath, resolvedLocal);
+        try {
+            await helper(remotePath, resolvedLocal);
+        }
+        finally {
+            sftp.end();
+        }
     }
 }

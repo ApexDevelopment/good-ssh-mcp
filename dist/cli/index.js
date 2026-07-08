@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import { callDaemon } from '../shared/client.js';
 import * as fs from 'fs/promises';
+import * as path from 'path';
 const program = new Command();
 program
     .name('good-ssh')
@@ -135,6 +136,55 @@ program
     }
     catch (err) {
         console.error('Failed to change shell:', err.message);
+        process.exit(1);
+    }
+});
+program
+    .command('run <connectionId> <localScriptPathOrDash>')
+    .description('Upload and run a script on the remote machine (reads from stdin if path is -)')
+    .option('-e, --extension <ext>', 'The file extension to use (e.g. .py, .ps1, .sh, .bat)')
+    .option('-i, --interpreter <interpreter>', 'The interpreter command (e.g. python, bash, powershell)')
+    .action(async (connectionId, localScriptPathOrDash, options) => {
+    try {
+        let script = '';
+        let extension = options.extension;
+        if (localScriptPathOrDash === '-') {
+            script = await new Promise((resolve) => {
+                let data = '';
+                process.stdin.setEncoding('utf8');
+                process.stdin.on('data', (chunk) => {
+                    data += chunk;
+                });
+                process.stdin.on('end', () => {
+                    resolve(data);
+                });
+                process.stdin.resume();
+            });
+            if (!extension) {
+                console.error('Error: --extension <ext> is required when reading from stdin.');
+                process.exit(1);
+            }
+        }
+        else {
+            script = await fs.readFile(localScriptPathOrDash, 'utf8');
+            if (!extension) {
+                extension = path.extname(localScriptPathOrDash);
+            }
+        }
+        if (!extension) {
+            console.error('Error: Could not determine extension. Please specify using --extension <ext>.');
+            process.exit(1);
+        }
+        const res = await callDaemon('/run-script', {
+            connectionId,
+            script,
+            extension,
+            interpreter: options.interpreter
+        });
+        console.log(JSON.stringify(res, null, 2));
+    }
+    catch (err) {
+        console.error('Script run failed:', err.message);
         process.exit(1);
     }
 });

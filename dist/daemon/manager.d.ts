@@ -32,6 +32,7 @@ export declare class SSHConnectionManager {
     }): Promise<CommandResult>;
     changeShell(id: string, shell: string): Promise<string>;
     changeDirectory(id: string, dirPath: string): Promise<string>;
+    runScript(id: string, script: string, extension: string, interpreter?: string): Promise<CommandResult>;
     private resolveRemoteAbsolutePath;
     getFileContents(id: string, remotePath: string): Promise<string>;
     writeFileContents(id: string, remotePath: string, content: string): Promise<void>;
