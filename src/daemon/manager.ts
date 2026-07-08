@@ -13,7 +13,8 @@ export interface ActiveConnection {
 
 function executeCommandPromise(
   conn: Client,
-  command: string
+  command: string,
+  stdin?: string
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
     conn.exec(command, (err: Error | undefined, stream: any) => {
@@ -23,6 +24,11 @@ function executeCommandPromise(
           stderr: err.message,
           exitCode: -1
         });
+      }
+      
+      if (stdin !== undefined) {
+        stream.write(stdin);
+        stream.end();
       }
       
       let stdout = '';
@@ -42,6 +48,25 @@ function executeCommandPromise(
       });
     });
   });
+}
+
+function escapeWindowsArg(val: string): string {
+  let res = '';
+  let backslashes = 0;
+  for (let i = 0; i < val.length; i++) {
+    const char = val[i];
+    if (char === '\\') {
+      backslashes++;
+    } else if (char === '"') {
+      res += '\\'.repeat(backslashes * 2 + 1) + '"';
+      backslashes = 0;
+    } else {
+      res += '\\'.repeat(backslashes) + char;
+      backslashes = 0;
+    }
+  }
+  res += '\\'.repeat(backslashes);
+  return res;
 }
 
 function isRemoteDirectory(attrs: any): boolean {
@@ -355,70 +380,6 @@ export class SSHConnectionManager {
     return conn.info;
   }
 
-  private formatAndWrapCommand(
-    conn: ActiveConnection,
-    command: string,
-    options: { cwd?: string; env?: Record<string, string> } = {}
-  ): string {
-    const desiredShell = conn.info.shell;
-    const defaultShell = conn.defaultShell;
-    const runCwd = options.cwd || conn.info.cwd;
-    const osType = conn.info.os;
-
-    const isPowershell = desiredShell === 'powershell' || desiredShell.endsWith('pwsh');
-    const isCmd = desiredShell === 'cmd';
-    
-    let wrappedCommand = command;
-
-    if (osType === 'windows' || isPowershell || isCmd) {
-      if (isPowershell) {
-        const envParts: string[] = [];
-        if (options.env) {
-          for (const [k, v] of Object.entries(options.env)) {
-            envParts.push(`$env:${k}="${v.replace(/"/g, '`"')}";`);
-          }
-        }
-        const cwdPart = runCwd ? `Set-Location -Path "${runCwd.replace(/"/g, '`"')}"; ` : '';
-        wrappedCommand = `${cwdPart}${envParts.join(' ')}${command}`;
-      } else {
-        const envParts: string[] = [];
-        if (options.env) {
-          for (const [k, v] of Object.entries(options.env)) {
-            envParts.push(`set "${k}=${v.replace(/"/g, '""')}"`);
-          }
-        }
-        const cwdPart = runCwd ? `cd /d "${runCwd.replace(/"/g, '""')}"` : '';
-        const parts = [...(cwdPart ? [cwdPart] : []), ...envParts, command];
-        wrappedCommand = parts.join(' && ');
-      }
-    } else {
-      const envParts: string[] = [];
-      if (options.env) {
-        for (const [k, v] of Object.entries(options.env)) {
-          envParts.push(`export ${k}="${v.replace(/"/g, '\\"')}"`);
-        }
-      }
-      const cwdPart = runCwd ? `cd "${runCwd.replace(/"/g, '\\"')}"` : '';
-      const parts = [...envParts, ...(cwdPart ? [cwdPart] : []), command];
-      wrappedCommand = parts.join(' && ');
-    }
-
-    if (desiredShell !== defaultShell) {
-      if (isPowershell) {
-        const escaped = wrappedCommand.replace(/"/g, '`"').replace(/\$/g, '`$');
-        wrappedCommand = `powershell -NoProfile -NonInteractive -Command "${escaped}"`;
-      } else if (isCmd) {
-        const escaped = wrappedCommand.replace(/"/g, '""');
-        wrappedCommand = `cmd.exe /c "${escaped}"`;
-      } else {
-        const escaped = wrappedCommand.replace(/"/g, '\\"').replace(/\$/g, '\\$');
-        wrappedCommand = `${desiredShell} -c "${escaped}"`;
-      }
-    }
-
-    return wrappedCommand;
-  }
-
   async execute(
     id: string,
     command: string,
@@ -430,8 +391,66 @@ export class SSHConnectionManager {
     }
 
     conn.info.lastUsedAt = new Date().toISOString();
-    const finalCmd = this.formatAndWrapCommand(conn, command, options);
-    return executeCommandPromise(conn.client, finalCmd);
+
+    const desiredShell = conn.info.shell;
+    const defaultShell = conn.defaultShell;
+    const runCwd = options.cwd || conn.info.cwd;
+    const osType = conn.info.os;
+
+    const isPowershell = desiredShell === 'powershell' || desiredShell.endsWith('pwsh');
+    const isCmd = desiredShell === 'cmd';
+    
+    // 1. Format the command for the desired shell
+    let innerCommand = command;
+    if (osType === 'windows' || isPowershell || isCmd) {
+      if (isPowershell) {
+        const envParts: string[] = [];
+        if (options.env) {
+          for (const [k, v] of Object.entries(options.env)) {
+            envParts.push(`$env:${k}="${v.replace(/"/g, '`"')}";`);
+          }
+        }
+        const cwdPart = runCwd ? `Set-Location -Path "${runCwd.replace(/"/g, '`"')}"; ` : '';
+        innerCommand = `${cwdPart}${envParts.join(' ')}${command}`;
+      } else {
+        const envParts: string[] = [];
+        if (options.env) {
+          for (const [k, v] of Object.entries(options.env)) {
+            envParts.push(`set "${k}=${v.replace(/"/g, '""')}"`);
+          }
+        }
+        const cwdPart = runCwd ? `cd /d "${runCwd.replace(/"/g, '""')}"` : '';
+        const parts = [...(cwdPart ? [cwdPart] : []), ...envParts, command];
+        innerCommand = parts.join(' && ');
+      }
+    } else {
+      const envParts: string[] = [];
+      if (options.env) {
+        for (const [k, v] of Object.entries(options.env)) {
+          envParts.push(`export ${k}="${v.replace(/"/g, '\\"')}"`);
+        }
+      }
+      const cwdPart = runCwd ? `cd "${runCwd.replace(/"/g, '\\"')}"` : '';
+      const parts = [...envParts, ...(cwdPart ? [cwdPart] : []), command];
+      innerCommand = parts.join(' && ');
+    }
+
+    // 2. If the desired shell differs from the default login shell, execute the desired shell and pipe the inner command via stdin
+    if (desiredShell !== defaultShell) {
+      let wrapperCmd = '';
+      if (isPowershell) {
+        wrapperCmd = 'powershell -NoProfile -NonInteractive -Command -';
+      } else if (isCmd) {
+        wrapperCmd = 'cmd.exe';
+      } else {
+        wrapperCmd = `${desiredShell} -s`;
+      }
+      
+      return executeCommandPromise(conn.client, wrapperCmd, innerCommand);
+    }
+
+    // 3. Otherwise, execute normally
+    return executeCommandPromise(conn.client, innerCommand);
   }
 
   async changeShell(id: string, shell: string): Promise<string> {

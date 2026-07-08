@@ -26,7 +26,6 @@ export declare class SSHConnectionManager {
     disconnectAll(): void;
     list(): ConnectionInfo[];
     getConnectionInfo(id: string): ConnectionInfo;
-    private formatAndWrapCommand;
     execute(id: string, command: string, options?: {
         cwd?: string;
         env?: Record<string, string>;

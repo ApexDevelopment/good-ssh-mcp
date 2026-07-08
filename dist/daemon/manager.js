@@ -2,7 +2,7 @@ import ssh2 from 'ssh2';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-function executeCommandPromise(conn, command) {
+function executeCommandPromise(conn, command, stdin) {
     return new Promise((resolve) => {
         conn.exec(command, (err, stream) => {
             if (err) {
@@ -11,6 +11,10 @@ function executeCommandPromise(conn, command) {
                     stderr: err.message,
                     exitCode: -1
                 });
+            }
+            if (stdin !== undefined) {
+                stream.write(stdin);
+                stream.end();
             }
             let stdout = '';
             let stderr = '';
@@ -28,6 +32,26 @@ function executeCommandPromise(conn, command) {
             });
         });
     });
+}
+function escapeWindowsArg(val) {
+    let res = '';
+    let backslashes = 0;
+    for (let i = 0; i < val.length; i++) {
+        const char = val[i];
+        if (char === '\\') {
+            backslashes++;
+        }
+        else if (char === '"') {
+            res += '\\'.repeat(backslashes * 2 + 1) + '"';
+            backslashes = 0;
+        }
+        else {
+            res += '\\'.repeat(backslashes) + char;
+            backslashes = 0;
+        }
+    }
+    res += '\\'.repeat(backslashes);
+    return res;
 }
 function isRemoteDirectory(attrs) {
     if (!attrs)
@@ -308,14 +332,20 @@ export class SSHConnectionManager {
             throw new Error(`Connection "${id}" not found.`);
         return conn.info;
     }
-    formatAndWrapCommand(conn, command, options = {}) {
+    async execute(id, command, options = {}) {
+        const conn = this.connections.get(id);
+        if (!conn) {
+            throw new Error(`Connection "${id}" not found. Connect first.`);
+        }
+        conn.info.lastUsedAt = new Date().toISOString();
         const desiredShell = conn.info.shell;
         const defaultShell = conn.defaultShell;
         const runCwd = options.cwd || conn.info.cwd;
         const osType = conn.info.os;
         const isPowershell = desiredShell === 'powershell' || desiredShell.endsWith('pwsh');
         const isCmd = desiredShell === 'cmd';
-        let wrappedCommand = command;
+        // 1. Format the command for the desired shell
+        let innerCommand = command;
         if (osType === 'windows' || isPowershell || isCmd) {
             if (isPowershell) {
                 const envParts = [];
@@ -325,7 +355,7 @@ export class SSHConnectionManager {
                     }
                 }
                 const cwdPart = runCwd ? `Set-Location -Path "${runCwd.replace(/"/g, '`"')}"; ` : '';
-                wrappedCommand = `${cwdPart}${envParts.join(' ')}${command}`;
+                innerCommand = `${cwdPart}${envParts.join(' ')}${command}`;
             }
             else {
                 const envParts = [];
@@ -336,7 +366,7 @@ export class SSHConnectionManager {
                 }
                 const cwdPart = runCwd ? `cd /d "${runCwd.replace(/"/g, '""')}"` : '';
                 const parts = [...(cwdPart ? [cwdPart] : []), ...envParts, command];
-                wrappedCommand = parts.join(' && ');
+                innerCommand = parts.join(' && ');
             }
         }
         else {
@@ -348,32 +378,24 @@ export class SSHConnectionManager {
             }
             const cwdPart = runCwd ? `cd "${runCwd.replace(/"/g, '\\"')}"` : '';
             const parts = [...envParts, ...(cwdPart ? [cwdPart] : []), command];
-            wrappedCommand = parts.join(' && ');
+            innerCommand = parts.join(' && ');
         }
+        // 2. If the desired shell differs from the default login shell, execute the desired shell and pipe the inner command via stdin
         if (desiredShell !== defaultShell) {
+            let wrapperCmd = '';
             if (isPowershell) {
-                const escaped = wrappedCommand.replace(/"/g, '`"').replace(/\$/g, '`$');
-                wrappedCommand = `powershell -NoProfile -NonInteractive -Command "${escaped}"`;
+                wrapperCmd = 'powershell -NoProfile -NonInteractive -Command -';
             }
             else if (isCmd) {
-                const escaped = wrappedCommand.replace(/"/g, '""');
-                wrappedCommand = `cmd.exe /c "${escaped}"`;
+                wrapperCmd = 'cmd.exe';
             }
             else {
-                const escaped = wrappedCommand.replace(/"/g, '\\"').replace(/\$/g, '\\$');
-                wrappedCommand = `${desiredShell} -c "${escaped}"`;
+                wrapperCmd = `${desiredShell} -s`;
             }
+            return executeCommandPromise(conn.client, wrapperCmd, innerCommand);
         }
-        return wrappedCommand;
-    }
-    async execute(id, command, options = {}) {
-        const conn = this.connections.get(id);
-        if (!conn) {
-            throw new Error(`Connection "${id}" not found. Connect first.`);
-        }
-        conn.info.lastUsedAt = new Date().toISOString();
-        const finalCmd = this.formatAndWrapCommand(conn, command, options);
-        return executeCommandPromise(conn.client, finalCmd);
+        // 3. Otherwise, execute normally
+        return executeCommandPromise(conn.client, innerCommand);
     }
     async changeShell(id, shell) {
         const conn = this.connections.get(id);
