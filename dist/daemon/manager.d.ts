@@ -3,6 +3,7 @@ import { ConnectionInfo, CommandResult } from '../shared/types.js';
 export interface ActiveConnection {
     client: Client;
     info: ConnectionInfo;
+    defaultShell: string;
 }
 export declare function parseSshConfig(targetHost: string): Promise<Partial<{
     host: string;
@@ -25,10 +26,12 @@ export declare class SSHConnectionManager {
     disconnectAll(): void;
     list(): ConnectionInfo[];
     getConnectionInfo(id: string): ConnectionInfo;
+    private formatAndWrapCommand;
     execute(id: string, command: string, options?: {
         cwd?: string;
         env?: Record<string, string>;
     }): Promise<CommandResult>;
+    changeShell(id: string, shell: string): Promise<string>;
     changeDirectory(id: string, dirPath: string): Promise<string>;
     private resolveRemoteAbsolutePath;
     getFileContents(id: string, remotePath: string): Promise<string>;

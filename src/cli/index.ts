@@ -134,6 +134,19 @@ program
   });
 
 program
+  .command('shell <connectionId> <shell>')
+  .description('Change the active command execution shell for subsequent executions')
+  .action(async (connectionId, shell) => {
+    try {
+      const res = await callDaemon('/shell', { connectionId, shell });
+      console.log(`Active shell updated to: ${res.shell}`);
+    } catch (err: any) {
+      console.error('Failed to change shell:', err.message);
+      process.exit(1);
+    }
+  });
+
+program
   .command('upload <connectionId> <localPath> <remotePath>')
   .description('Upload a file or folder recursively to the remote machine')
   .action(async (connectionId, localPath, remotePath) => {

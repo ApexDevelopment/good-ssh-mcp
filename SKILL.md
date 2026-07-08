@@ -140,21 +140,27 @@ Updates the stateful CWD for a connection.
   - `connectionId` (string, required)
   - `path` (string, required): Directory path (absolute or relative).
 
-### 6. `ssh_get_file_contents` / `ssh_write_file_contents`
+### 6. `ssh_change_shell`
+Updates the active execution shell for a connection.
+- **Arguments**:
+  - `connectionId` (string, required)
+  - `shell` (string, required): Target shell (e.g. `powershell`, `cmd`, `/bin/bash`, `/bin/zsh`, `/usr/bin/pwsh`).
+
+### 7. `ssh_get_file_contents` / `ssh_write_file_contents`
 Directly read/write files via SFTP to avoid terminal quoting issues.
 - **Arguments**:
   - `connectionId` (string, required)
   - `remotePath` (string, required)
   - `content` (string, required, only for `ssh_write_file_contents`)
 
-### 7. `ssh_upload_file` / `ssh_download_file`
+### 8. `ssh_upload_file` / `ssh_download_file`
 Upload/download single files.
 - **Arguments**:
   - `connectionId` (string, required)
   - `localPath` (string, required)
   - `remotePath` (string, required)
 
-### 8. `ssh_upload_directory` / `ssh_download_directory`
+### 9. `ssh_upload_directory` / `ssh_download_directory`
 Recursively transfer directories.
 - **Arguments**:
   - `connectionId` (string, required)
@@ -179,6 +185,9 @@ good-ssh exec my-server "ls -la"
 
 # Change directory
 good-ssh cd my-server /var/log
+
+# Change active shell statefully
+good-ssh shell my-server powershell
 
 # Read a remote file
 good-ssh cat my-server /var/log/nginx/error.log

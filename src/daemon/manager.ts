@@ -8,6 +8,7 @@ import { ConnectionInfo, CommandResult } from '../shared/types.js';
 export interface ActiveConnection {
   client: Client;
   info: ConnectionInfo;
+  defaultShell: string;
 }
 
 function executeCommandPromise(
@@ -288,7 +289,11 @@ export class SSHConnectionManager {
             lastUsedAt: new Date().toISOString()
           };
 
-          this.connections.set(connId, { client, info });
+          this.connections.set(connId, {
+            client,
+            info,
+            defaultShell: probe.shell
+          });
           isSettled = true;
           resolve(info);
         } catch (err: any) {
@@ -350,6 +355,70 @@ export class SSHConnectionManager {
     return conn.info;
   }
 
+  private formatAndWrapCommand(
+    conn: ActiveConnection,
+    command: string,
+    options: { cwd?: string; env?: Record<string, string> } = {}
+  ): string {
+    const desiredShell = conn.info.shell;
+    const defaultShell = conn.defaultShell;
+    const runCwd = options.cwd || conn.info.cwd;
+    const osType = conn.info.os;
+
+    const isPowershell = desiredShell === 'powershell' || desiredShell.endsWith('pwsh');
+    const isCmd = desiredShell === 'cmd';
+    
+    let wrappedCommand = command;
+
+    if (osType === 'windows' || isPowershell || isCmd) {
+      if (isPowershell) {
+        const envParts: string[] = [];
+        if (options.env) {
+          for (const [k, v] of Object.entries(options.env)) {
+            envParts.push(`$env:${k}="${v.replace(/"/g, '`"')}";`);
+          }
+        }
+        const cwdPart = runCwd ? `Set-Location -Path "${runCwd.replace(/"/g, '`"')}"; ` : '';
+        wrappedCommand = `${cwdPart}${envParts.join(' ')}${command}`;
+      } else {
+        const envParts: string[] = [];
+        if (options.env) {
+          for (const [k, v] of Object.entries(options.env)) {
+            envParts.push(`set "${k}=${v.replace(/"/g, '""')}"`);
+          }
+        }
+        const cwdPart = runCwd ? `cd /d "${runCwd.replace(/"/g, '""')}"` : '';
+        const parts = [...(cwdPart ? [cwdPart] : []), ...envParts, command];
+        wrappedCommand = parts.join(' && ');
+      }
+    } else {
+      const envParts: string[] = [];
+      if (options.env) {
+        for (const [k, v] of Object.entries(options.env)) {
+          envParts.push(`export ${k}="${v.replace(/"/g, '\\"')}"`);
+        }
+      }
+      const cwdPart = runCwd ? `cd "${runCwd.replace(/"/g, '\\"')}"` : '';
+      const parts = [...envParts, ...(cwdPart ? [cwdPart] : []), command];
+      wrappedCommand = parts.join(' && ');
+    }
+
+    if (desiredShell !== defaultShell) {
+      if (isPowershell) {
+        const escaped = wrappedCommand.replace(/"/g, '`"').replace(/\$/g, '`$');
+        wrappedCommand = `powershell -NoProfile -NonInteractive -Command "${escaped}"`;
+      } else if (isCmd) {
+        const escaped = wrappedCommand.replace(/"/g, '""');
+        wrappedCommand = `cmd.exe /c "${escaped}"`;
+      } else {
+        const escaped = wrappedCommand.replace(/"/g, '\\"').replace(/\$/g, '\\$');
+        wrappedCommand = `${desiredShell} -c "${escaped}"`;
+      }
+    }
+
+    return wrappedCommand;
+  }
+
   async execute(
     id: string,
     command: string,
@@ -361,47 +430,18 @@ export class SSHConnectionManager {
     }
 
     conn.info.lastUsedAt = new Date().toISOString();
-    
-    const runCwd = options.cwd || conn.info.cwd;
-    const osType = conn.info.os;
-    const shellType = conn.info.shell;
+    const finalCmd = this.formatAndWrapCommand(conn, command, options);
+    return executeCommandPromise(conn.client, finalCmd);
+  }
 
-    let finalCommand = command;
-
-    if (osType === 'windows') {
-      if (shellType === 'powershell') {
-        const envParts: string[] = [];
-        if (options.env) {
-          for (const [k, v] of Object.entries(options.env)) {
-            envParts.push(`$env:${k}="${v.replace(/"/g, '`"')}";`);
-          }
-        }
-        const cwdPart = runCwd ? `Set-Location -Path "${runCwd.replace(/"/g, '`"')}"; ` : '';
-        finalCommand = `${cwdPart}${envParts.join(' ')}${command}`;
-      } else {
-        const envParts: string[] = [];
-        if (options.env) {
-          for (const [k, v] of Object.entries(options.env)) {
-            envParts.push(`set "${k}=${v.replace(/"/g, '""')}"`);
-          }
-        }
-        const cwdPart = runCwd ? `cd /d "${runCwd.replace(/"/g, '""')}"` : '';
-        const parts = [...(cwdPart ? [cwdPart] : []), ...envParts, command];
-        finalCommand = parts.join(' && ');
-      }
-    } else {
-      const envParts: string[] = [];
-      if (options.env) {
-        for (const [k, v] of Object.entries(options.env)) {
-          envParts.push(`export ${k}="${v.replace(/"/g, '\\"')}"`);
-        }
-      }
-      const cwdPart = runCwd ? `cd "${runCwd.replace(/"/g, '\\"')}"` : '';
-      const parts = [...envParts, ...(cwdPart ? [cwdPart] : []), command];
-      finalCommand = parts.join(' && ');
+  async changeShell(id: string, shell: string): Promise<string> {
+    const conn = this.connections.get(id);
+    if (!conn) {
+      throw new Error(`Connection "${id}" not found.`);
     }
-
-    return executeCommandPromise(conn.client, finalCommand);
+    conn.info.shell = shell;
+    conn.info.lastUsedAt = new Date().toISOString();
+    return shell;
   }
 
   async changeDirectory(id: string, dirPath: string): Promise<string> {
@@ -436,7 +476,7 @@ export class SSHConnectionManager {
     }
     
     try {
-      const res = await executeCommandPromise(conn.client, resolveCmd);
+      const res = await this.execute(id, resolveCmd);
       if (res.exitCode === 0 && res.stdout.trim()) {
         const resolved = res.stdout.trim();
         conn.info.cwd = resolved;

@@ -99,6 +99,22 @@ async function main() {
       throw new Error('Stateful CWD update verify failed!');
     }
 
+    console.log('\n--- 4.5. Testing Shell Switching ---');
+    const shellRes = await callDaemon('/shell', {
+      connectionId: 'test-local',
+      shell: '/bin/sh'
+    });
+    console.log('Shell updated response:', shellRes);
+    if (shellRes.shell !== '/bin/sh') {
+      throw new Error('Shell switch assertion failed!');
+    }
+
+    const listAfterShell = await callDaemon('/connections');
+    console.log('Connection shell after change:', listAfterShell[0].shell);
+    if (listAfterShell[0].shell !== '/bin/sh') {
+      throw new Error('Stateful shell update verify failed!');
+    }
+
     console.log('\n--- 5. Testing Disconnection ---');
     await callDaemon('/disconnect', { connectionId: 'test-local' });
     console.log('Disconnected.');

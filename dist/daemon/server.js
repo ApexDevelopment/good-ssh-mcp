@@ -123,6 +123,15 @@ export class DaemonServer {
                             this.sendJson(res, 200, { cwd: newCwd });
                             break;
                         }
+                        case '/shell': {
+                            if (!body.connectionId || !body.shell) {
+                                this.sendError(res, 400, 'Missing connectionId or shell');
+                                break;
+                            }
+                            const newShell = await this.manager.changeShell(body.connectionId, body.shell);
+                            this.sendJson(res, 200, { shell: newShell });
+                            break;
+                        }
                         case '/upload-file': {
                             if (!body.connectionId || !body.localPath || !body.remotePath) {
                                 this.sendError(res, 400, 'Missing required fields');

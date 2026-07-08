@@ -80,6 +80,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 }
             },
             {
+                name: "ssh_change_shell",
+                description: "Change the active command execution shell (e.g. powershell, cmd, /bin/bash, /bin/zsh) for subsequent executions on a connection. Environment variable prepending and directory changes will automatically adjust to use the syntax of the new shell.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        connectionId: { type: "string", description: "The ID/tag of the connection." },
+                        shell: { type: "string", description: "The path or name of the target shell (e.g., 'powershell', 'cmd', '/bin/bash')." }
+                    },
+                    required: ["connectionId", "shell"]
+                }
+            },
+            {
                 name: "ssh_get_file_contents",
                 description: "Directly read the text contents of a file on the remote machine via SFTP (avoids shell quote escaping issues).",
                 inputSchema: {
@@ -196,6 +208,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 const res = await callDaemon("/cd", args);
                 return {
                     content: [{ type: "text", text: `CWD updated to: ${res.cwd}` }]
+                };
+            }
+            case "ssh_change_shell": {
+                const res = await callDaemon("/shell", args);
+                return {
+                    content: [{ type: "text", text: `Active shell updated to: ${res.shell}` }]
                 };
             }
             case "ssh_get_file_contents": {
