@@ -126,7 +126,12 @@ export class DaemonServer {
                 cwd: body.cwd,
                 env: body.env
               });
-              this.sendJson(res, 200, result);
+              const connInfo = this.manager.getConnectionInfo(body.connectionId);
+              this.sendJson(res, 200, {
+                ...result,
+                cwd: connInfo.cwd,
+                shell: connInfo.shell
+              });
               break;
             }
             case '/cd': {
@@ -158,7 +163,12 @@ export class DaemonServer {
                 body.extension,
                 body.interpreter
               );
-              this.sendJson(res, 200, result);
+              const connInfo = this.manager.getConnectionInfo(body.connectionId);
+              this.sendJson(res, 200, {
+                ...result,
+                cwd: connInfo.cwd,
+                shell: connInfo.shell
+              });
               break;
             }
             case '/upload-file': {
