@@ -4,6 +4,7 @@ export interface ActiveConnection {
     client: Client;
     info: ConnectionInfo;
     defaultShell: string;
+    homeDir: string;
 }
 export declare function parseSshConfig(targetHost: string): Promise<Partial<{
     host: string;
