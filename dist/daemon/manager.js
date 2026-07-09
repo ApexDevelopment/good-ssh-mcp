@@ -66,14 +66,14 @@ function isRemoteDirectory(attrs, longname) {
     // Mode bitwise check: S_IFDIR is 0o040000
     return (attrs.mode & 0o170000) === 0o040000;
 }
-function resolveRemotePath(conn, remotePath) {
+export function resolveRemotePath(osType, homeDir, cwd, remotePath) {
     let resolved = remotePath;
-    const osType = conn.info.os;
     const separator = osType === 'windows' ? '\\' : '/';
-    if (resolved.startsWith('~')) {
-        const home = conn.homeDir;
-        const suffix = resolved.slice(1);
-        resolved = `${home}${suffix}`;
+    if (resolved === '~') {
+        resolved = homeDir;
+    }
+    else if (resolved.startsWith('~/') || resolved.startsWith('~\\')) {
+        resolved = `${homeDir}${resolved.slice(1)}`;
     }
     else {
         let isAbsolute = false;
@@ -84,7 +84,6 @@ function resolveRemotePath(conn, remotePath) {
             isAbsolute = resolved.startsWith('/');
         }
         if (!isAbsolute) {
-            const cwd = conn.info.cwd;
             resolved = `${cwd}${cwd.endsWith(separator) ? '' : separator}${resolved}`;
         }
     }
@@ -450,9 +449,7 @@ export class SSHConnectionManager {
         }
         const uuid = crypto.randomUUID();
         const tempFileName = `.good_ssh_script_${uuid}${extension}`;
-        // Always use forward slashes for SFTP paths
-        const sftpCwd = conn.info.cwd.replace(/\\/g, '/');
-        const tempFilePath = `${sftpCwd}${sftpCwd.endsWith('/') ? '' : '/'}${tempFileName}`;
+        const tempFilePath = resolveRemotePath(conn.info.os, conn.homeDir, conn.info.cwd, tempFileName);
         try {
             // 1. Write script content to remote file
             await this.writeFileContents(id, tempFilePath, script);
@@ -536,7 +533,7 @@ export class SSHConnectionManager {
         if (!conn)
             throw new Error(`Connection "${id}" not found.`);
         const sftp = await getSftp(conn.client);
-        const resolvedPath = resolveRemotePath(conn, remotePath);
+        const resolvedPath = resolveRemotePath(conn.info.os, conn.homeDir, conn.info.cwd, remotePath);
         return new Promise((resolve, reject) => {
             const chunks = [];
             const stream = sftp.createReadStream(resolvedPath, { encoding: 'utf8' });
@@ -558,7 +555,7 @@ export class SSHConnectionManager {
         if (!conn)
             throw new Error(`Connection "${id}" not found.`);
         const sftp = await getSftp(conn.client);
-        const resolvedPath = resolveRemotePath(conn, remotePath);
+        const resolvedPath = resolveRemotePath(conn.info.os, conn.homeDir, conn.info.cwd, remotePath);
         return new Promise((resolve, reject) => {
             const stream = sftp.createWriteStream(resolvedPath, { encoding: 'utf8' });
             let completed = false;
@@ -587,7 +584,7 @@ export class SSHConnectionManager {
         if (!conn)
             throw new Error(`Connection "${id}" not found.`);
         const sftp = await getSftp(conn.client);
-        const resolvedPath = resolveRemotePath(conn, remotePath);
+        const resolvedPath = resolveRemotePath(conn.info.os, conn.homeDir, conn.info.cwd, remotePath);
         let resolvedLocal = localPath;
         if (resolvedLocal.startsWith('~')) {
             resolvedLocal = path.join(os.homedir(), resolvedLocal.slice(1));
@@ -612,7 +609,7 @@ export class SSHConnectionManager {
         if (!conn)
             throw new Error(`Connection "${id}" not found.`);
         const sftp = await getSftp(conn.client);
-        const resolvedPath = resolveRemotePath(conn, remotePath);
+        const resolvedPath = resolveRemotePath(conn.info.os, conn.homeDir, conn.info.cwd, remotePath);
         let resolvedLocal = localPath;
         if (resolvedLocal.startsWith('~')) {
             resolvedLocal = path.join(os.homedir(), resolvedLocal.slice(1));
@@ -638,7 +635,7 @@ export class SSHConnectionManager {
         if (!conn)
             throw new Error(`Connection "${id}" not found.`);
         const sftp = await getSftp(conn.client);
-        const resolvedPath = resolveRemotePath(conn, remotePath);
+        const resolvedPath = resolveRemotePath(conn.info.os, conn.homeDir, conn.info.cwd, remotePath);
         let resolvedLocal = localPath;
         if (resolvedLocal.startsWith('~')) {
             resolvedLocal = path.join(os.homedir(), resolvedLocal.slice(1));
@@ -682,7 +679,7 @@ export class SSHConnectionManager {
         if (!conn)
             throw new Error(`Connection "${id}" not found.`);
         const sftp = await getSftp(conn.client);
-        const resolvedPath = resolveRemotePath(conn, remotePath);
+        const resolvedPath = resolveRemotePath(conn.info.os, conn.homeDir, conn.info.cwd, remotePath);
         let resolvedLocal = localPath;
         if (resolvedLocal.startsWith('~')) {
             resolvedLocal = path.join(os.homedir(), resolvedLocal.slice(1));

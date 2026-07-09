@@ -6,6 +6,7 @@ export interface ActiveConnection {
     defaultShell: string;
     homeDir: string;
 }
+export declare function resolveRemotePath(osType: 'linux' | 'darwin' | 'windows' | 'unknown', homeDir: string, cwd: string, remotePath: string): string;
 export declare function parseSshConfig(targetHost: string): Promise<Partial<{
     host: string;
     username: string;
