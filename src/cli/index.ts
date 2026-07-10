@@ -4,6 +4,15 @@ import { Command } from 'commander';
 import { callDaemon } from '../shared/client.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import * as os from 'os';
+
+function resolveLocalPath(p: string): string {
+  let resolved = p;
+  if (resolved.startsWith('~')) {
+    resolved = path.join(os.homedir(), resolved.slice(1));
+  }
+  return path.resolve(resolved);
+}
 
 const program = new Command();
 
@@ -203,13 +212,14 @@ program
   .description('Upload a file or folder recursively to the remote machine')
   .action(async (connectionId, localPath, remotePath) => {
     try {
-      const stats = await fs.stat(localPath);
+      const absoluteLocalPath = resolveLocalPath(localPath);
+      const stats = await fs.stat(absoluteLocalPath);
       if (stats.isDirectory()) {
-        console.log(`Uploading directory recursively: ${localPath} -> ${remotePath}...`);
-        await callDaemon('/upload-dir', { connectionId, localPath, remotePath });
+        console.log(`Uploading directory recursively: ${absoluteLocalPath} -> ${remotePath}...`);
+        await callDaemon('/upload-dir', { connectionId, localPath: absoluteLocalPath, remotePath });
       } else {
-        console.log(`Uploading file: ${localPath} -> ${remotePath}...`);
-        await callDaemon('/upload-file', { connectionId, localPath, remotePath });
+        console.log(`Uploading file: ${absoluteLocalPath} -> ${remotePath}...`);
+        await callDaemon('/upload-file', { connectionId, localPath: absoluteLocalPath, remotePath });
       }
       console.log('Upload completed successfully.');
     } catch (err: any) {
@@ -223,14 +233,15 @@ program
   .description('Download a file or folder recursively from the remote machine')
   .action(async (connectionId, remotePath, localPath) => {
     try {
-      console.log(`Downloading: ${remotePath} -> ${localPath}...`);
+      const absoluteLocalPath = resolveLocalPath(localPath);
+      console.log(`Downloading: ${remotePath} -> ${absoluteLocalPath}...`);
       // Try directory first, fallback to file if it fails
       try {
-        await callDaemon('/download-dir', { connectionId, remotePath, localPath });
+        await callDaemon('/download-dir', { connectionId, remotePath, localPath: absoluteLocalPath });
         console.log('Directory download completed successfully.');
       } catch (dirErr: any) {
         // Fallback to file download
-        await callDaemon('/download-file', { connectionId, remotePath, localPath });
+        await callDaemon('/download-file', { connectionId, remotePath, localPath: absoluteLocalPath });
         console.log('File download completed successfully.');
       }
     } catch (err: any) {

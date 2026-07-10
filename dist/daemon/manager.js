@@ -734,6 +734,22 @@ export class SSHConnectionManager {
             resolvedLocal = path.join(os.homedir(), resolvedLocal.slice(1));
         }
         resolvedLocal = path.resolve(resolvedLocal);
+        // Verify local is a directory
+        try {
+            const stats = await fs.stat(resolvedLocal);
+            if (!stats.isDirectory()) {
+                throw new Error('Local path is not a directory');
+            }
+        }
+        catch (err) {
+            process.nextTick(() => {
+                try {
+                    sftp.end();
+                }
+                catch { }
+            });
+            throw err;
+        }
         const helper = async (localDir, remoteDir) => {
             await new Promise((resolve) => {
                 sftp.mkdir(remoteDir, () => {
@@ -783,6 +799,29 @@ export class SSHConnectionManager {
             resolvedLocal = path.join(os.homedir(), resolvedLocal.slice(1));
         }
         resolvedLocal = path.resolve(resolvedLocal);
+        // Verify remote is a directory
+        try {
+            const stats = await new Promise((resolve, reject) => {
+                sftp.stat(resolvedPath, (err, s) => {
+                    if (err)
+                        reject(err);
+                    else
+                        resolve(s);
+                });
+            });
+            if (!isRemoteDirectory(stats)) {
+                throw new Error('Remote path is not a directory');
+            }
+        }
+        catch (err) {
+            process.nextTick(() => {
+                try {
+                    sftp.end();
+                }
+                catch { }
+            });
+            throw err;
+        }
         const helper = async (remoteDir, localDir) => {
             await fs.mkdir(localDir, { recursive: true });
             const entries = await new Promise((resolve, reject) => {
