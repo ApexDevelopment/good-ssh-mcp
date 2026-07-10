@@ -45,9 +45,17 @@ function executeCommandPromise(
         });
       }).on('data', (data: Buffer) => {
         stdout += data.toString('utf8');
-      }).stderr.on('data', (data: Buffer) => {
-        stderr += data.toString('utf8');
+      }).on('error', (streamErr: any) => {
+        stderr += `\n[Stream Error: ${streamErr.message}]`;
       });
+      
+      if (stream.stderr) {
+        stream.stderr.on('data', (data: Buffer) => {
+          stderr += data.toString('utf8');
+        }).on('error', (stderrErr: any) => {
+          stderr += `\n[Stderr Stream Error: ${stderrErr.message}]`;
+        });
+      }
     });
   });
 }
@@ -115,8 +123,14 @@ export function resolveRemotePath(
 function getSftp(conn: Client): Promise<SFTPWrapper> {
   return new Promise((resolve, reject) => {
     conn.sftp((err: Error | undefined, sftp: SFTPWrapper) => {
-      if (err) reject(err);
-      else resolve(sftp);
+      if (err) {
+        reject(err);
+      } else {
+        sftp.on('error', (sftpErr: any) => {
+          console.error('SFTP Error occurred:', sftpErr.message);
+        });
+        resolve(sftp);
+      }
     });
   });
 }
@@ -275,17 +289,25 @@ export class SSHConnectionManager {
     passphrase?: string;
     connectionId?: string;
   }): Promise<ConnectionInfo> {
-    const configValues = await parseSshConfig(params.host);
+    let host = params.host;
+    let username = params.username;
+    if (host.includes('@')) {
+      const parts = host.split('@');
+      username = username ?? parts[0];
+      host = parts.slice(1).join('@');
+    }
+
+    const configValues = await parseSshConfig(host);
     
-    const host = configValues.host ?? params.host;
+    const resolvedHost = configValues.host ?? host;
     const port = params.port ?? configValues.port ?? 22;
-    const username = params.username ?? configValues.username;
+    const resolvedUsername = username ?? configValues.username;
     
-    if (!username) {
+    if (!resolvedUsername) {
       throw new Error(`Username is required to connect to ${host}. Please specify it in the command arguments or your ~/.ssh/config file.`);
     }
 
-    const connId = params.connectionId ?? (params.host === host ? `${username}@${host}:${port}` : params.host);
+    const connId = params.connectionId ?? `${resolvedUsername}@${resolvedHost}:${port}`;
 
     if (this.connections.has(connId)) {
       const existing = this.connections.get(connId)!;
@@ -297,12 +319,10 @@ export class SSHConnectionManager {
       }
     }
 
-    const client = new ssh2.Client();
-    
     const config: ConnectConfig = {
-      host,
+      host: resolvedHost,
       port,
-      username: username!,
+      username: resolvedUsername,
       readyTimeout: 20000,
       keepaliveInterval: 10000,
       keepaliveCountMax: 3
@@ -312,7 +332,21 @@ export class SSHConnectionManager {
       config.password = params.password;
     }
 
-    const resolvedPrivateKeyPath = params.privateKey ?? configValues.privateKey;
+    let resolvedPrivateKeyPath = params.privateKey ?? configValues.privateKey;
+    
+    // Check for default identity files if no private key/password specified
+    if (!params.password && !resolvedPrivateKeyPath) {
+      const defaultKeys = ['id_ed25519', 'id_rsa', 'id_ecdsa', 'id_dsa'];
+      for (const keyName of defaultKeys) {
+        const p = path.join(os.homedir(), '.ssh', keyName);
+        try {
+          await fs.access(p);
+          resolvedPrivateKeyPath = p;
+          break;
+        } catch {}
+      }
+    }
+
     if (resolvedPrivateKeyPath) {
       config.privateKey = await resolvePrivateKey(resolvedPrivateKeyPath, params.passphrase);
       if (params.passphrase) {
@@ -320,70 +354,93 @@ export class SSHConnectionManager {
       }
     }
 
-    // Fall back to local SSH agent if no credentials are provided
-    if (!params.password && !resolvedPrivateKeyPath) {
+    // Set agent fallback if we don't have password or specified key
+    let agentPath: string | undefined;
+    if (!params.password && !params.privateKey && !configValues.privateKey) {
       if (process.env.SSH_AUTH_SOCK) {
-        config.agent = process.env.SSH_AUTH_SOCK;
+        agentPath = process.env.SSH_AUTH_SOCK;
       } else if (process.platform === 'win32') {
-        config.agent = '\\\\.\\pipe\\openssh-ssh-agent';
+        agentPath = '\\\\.\\pipe\\openssh-ssh-agent';
       }
     }
 
-    return new Promise<ConnectionInfo>((resolve, reject) => {
-      let isSettled = false;
+    const tryConnect = (connectConfig: ConnectConfig): Promise<ConnectionInfo> => {
+      return new Promise<ConnectionInfo>((resolve, reject) => {
+        const client = new ssh2.Client();
+        let isSettled = false;
 
-      client.on('ready', async () => {
-        try {
-          const probe = await probeConnection(client);
-          
-          const info: ConnectionInfo = {
-            id: connId,
-            host: params.host,
-            port,
-            username: username!,
-            os: probe.os,
-            shell: probe.shell,
-            cwd: probe.cwd,
-            connectedAt: new Date().toISOString(),
-            lastUsedAt: new Date().toISOString()
-          };
+        client.on('ready', async () => {
+          try {
+            const probe = await probeConnection(client);
+            
+            const info: ConnectionInfo = {
+              id: connId,
+              host: params.host,
+              port,
+              username: resolvedUsername,
+              os: probe.os,
+              shell: probe.shell,
+              cwd: probe.cwd,
+              connectedAt: new Date().toISOString(),
+              lastUsedAt: new Date().toISOString()
+            };
 
-          this.connections.set(connId, {
-            client,
-            info,
-            defaultShell: probe.shell,
-            homeDir: probe.cwd
-          });
-          isSettled = true;
-          resolve(info);
-        } catch (err: any) {
-          client.end();
+            this.connections.set(connId, {
+              client,
+              info,
+              defaultShell: probe.shell,
+              homeDir: probe.cwd
+            });
+            isSettled = true;
+            resolve(info);
+          } catch (err: any) {
+            client.end();
+            if (!isSettled) {
+              isSettled = true;
+              reject(new Error(`Failed to probe host after connection: ${err.message}`));
+            }
+          }
+        });
+
+        client.on('error', (err) => {
           if (!isSettled) {
             isSettled = true;
-            reject(new Error(`Failed to probe host after connection: ${err.message}`));
+            reject(err);
+          } else {
+            this.connections.delete(connId);
           }
-        }
-      });
+        });
 
-      client.on('error', (err) => {
-        if (!isSettled) {
-          isSettled = true;
-          reject(err);
-        } else {
+        client.on('end', () => {
           this.connections.delete(connId);
+        });
+
+        client.on('close', () => {
+          this.connections.delete(connId);
+        });
+
+        client.connect(connectConfig);
+      });
+    };
+
+    // If agent is available, try it first
+    if (agentPath) {
+      try {
+        return await tryConnect({ ...config, agent: agentPath });
+      } catch (err: any) {
+        const isAgentConnectError = err.message.includes('agent') || 
+                                    err.message.includes('socket') || 
+                                    err.code === 'ENOENT' || 
+                                    err.code === 'ECONNREFUSED';
+        if (isAgentConnectError && config.privateKey) {
+          // Retry with privateKey instead of agent
+          return await tryConnect(config);
         }
-      });
+        throw err;
+      }
+    }
 
-      client.on('end', () => {
-        this.connections.delete(connId);
-      });
-
-      client.on('close', () => {
-        this.connections.delete(connId);
-      });
-
-      client.connect(config);
-    });
+    return await tryConnect(config);
   }
 
   disconnect(id: string): void {
@@ -546,12 +603,20 @@ export class SSHConnectionManager {
       // 4. Clean up remote temp file
       try {
         const sftp = await getSftp(conn.client);
-        await new Promise<void>((resolve, reject) => {
-          sftp.unlink(tempFilePath, (err) => {
-            if (err) reject(err);
-            else resolve();
+        try {
+          await new Promise<void>((resolve, reject) => {
+            sftp.unlink(tempFilePath, (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
           });
-        });
+        } finally {
+          process.nextTick(() => {
+            try {
+              sftp.end();
+            } catch {}
+          });
+        }
       } catch (err: any) {
         console.error(`Failed to clean up remote temp file ${tempFilePath}:`, err.message);
       }
@@ -615,12 +680,20 @@ export class SSHConnectionManager {
       });
       
       stream.on('end', () => {
-        sftp.end();
+        process.nextTick(() => {
+          try {
+            sftp.end();
+          } catch {}
+        });
         resolve(Buffer.concat(chunks).toString('utf8'));
       });
       
       stream.on('error', (err: any) => {
-        sftp.end();
+        process.nextTick(() => {
+          try {
+            sftp.end();
+          } catch {}
+        });
         reject(err);
       });
     });
@@ -640,7 +713,11 @@ export class SSHConnectionManager {
       const done = () => {
         if (!completed) {
           completed = true;
-          sftp.end();
+          process.nextTick(() => {
+            try {
+              sftp.end();
+            } catch {}
+          });
           resolve();
         }
       };
@@ -651,7 +728,11 @@ export class SSHConnectionManager {
       stream.on('error', (err: any) => {
         if (!completed) {
           completed = true;
-          sftp.end();
+          process.nextTick(() => {
+            try {
+              sftp.end();
+            } catch {}
+          });
           reject(err);
         }
       });
@@ -681,7 +762,11 @@ export class SSHConnectionManager {
         });
       });
     } finally {
-      sftp.end();
+      process.nextTick(() => {
+        try {
+          sftp.end();
+        } catch {}
+      });
     }
   }
 
@@ -707,7 +792,11 @@ export class SSHConnectionManager {
         });
       });
     } finally {
-      sftp.end();
+      process.nextTick(() => {
+        try {
+          sftp.end();
+        } catch {}
+      });
     }
   }
 
@@ -752,7 +841,11 @@ export class SSHConnectionManager {
     try {
       await helper(resolvedLocal, resolvedPath);
     } finally {
-      sftp.end();
+      process.nextTick(() => {
+        try {
+          sftp.end();
+        } catch {}
+      });
     }
   }
 
@@ -803,7 +896,11 @@ export class SSHConnectionManager {
     try {
       await helper(resolvedPath, resolvedLocal);
     } finally {
-      sftp.end();
+      process.nextTick(() => {
+        try {
+          sftp.end();
+        } catch {}
+      });
     }
   }
 }

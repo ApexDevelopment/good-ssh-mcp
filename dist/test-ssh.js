@@ -65,6 +65,18 @@ async function main() {
             connectionId: 'test-local'
         });
         console.log('Connection established:', connectInfo);
+        console.log('\n--- 1.1 Testing Connection with username in host (user@host) ---');
+        const connectInfo2 = await callDaemon('/connect', {
+            host: 'test@127.0.0.1',
+            port: 2222,
+            password: 'password',
+            connectionId: 'test-user-at-host'
+        });
+        console.log('Connection established (user@host):', connectInfo2);
+        if (connectInfo2.username !== 'test') {
+            throw new Error('Username parsing from host failed!');
+        }
+        await callDaemon('/disconnect', { connectionId: 'test-user-at-host' });
         console.log('\n--- 2. Testing Connection Listing ---');
         const list = await callDaemon('/connections');
         console.log('Active connections:', list);

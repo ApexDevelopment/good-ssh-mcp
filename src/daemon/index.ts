@@ -1,11 +1,21 @@
 import { DaemonServer, getDaemonConfig, removeDaemonConfig } from './server.js';
 
 async function main() {
+  // Register process-level handlers to make the daemon resilient to unhandled crashes
+  process.on('uncaughtException', (err) => {
+    console.error('Daemon uncaught exception:', err);
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('Daemon unhandled rejection at:', promise, 'reason:', reason);
+  });
+
   const existingConfig = await getDaemonConfig();
   if (existingConfig) {
     // Ping to verify if it is actually alive
     try {
       const res = await fetch(`http://127.0.0.1:${existingConfig.port}/ping`, {
+        headers: { 'Connection': 'close' },
         signal: AbortSignal.timeout(1000)
       });
       if (res.ok) {

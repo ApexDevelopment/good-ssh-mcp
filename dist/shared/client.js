@@ -9,6 +9,7 @@ export async function getOrStartDaemon() {
     if (config) {
         try {
             const res = await fetch(`http://127.0.0.1:${config.port}/ping`, {
+                headers: { 'Connection': 'close' },
                 signal: AbortSignal.timeout(1000)
             });
             if (res.ok) {
@@ -51,6 +52,7 @@ export async function getOrStartDaemon() {
         if (config) {
             try {
                 const res = await fetch(`http://127.0.0.1:${config.port}/ping`, {
+                    headers: { 'Connection': 'close' },
                     signal: AbortSignal.timeout(500)
                 });
                 if (res.ok) {
@@ -68,7 +70,8 @@ export async function callDaemon(endpoint, body, method) {
     const config = await getOrStartDaemon();
     const headers = {
         'Authorization': `Bearer ${config.token}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Connection': 'close'
     };
     const resolvedMethod = method || (body ? 'POST' : 'GET');
     const res = await fetch(`http://127.0.0.1:${config.port}${endpoint}`, {
