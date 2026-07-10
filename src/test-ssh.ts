@@ -79,6 +79,31 @@ async function main() {
     }
     await callDaemon('/disconnect', { connectionId: 'test-user-at-host' });
 
+    console.log('\n--- 1.2 Testing Connection with auto-generated short ID ---');
+    // Disconnect test-local temporarily so we don't hit the connection reuse logic
+    await callDaemon('/disconnect', { connectionId: 'test-local' });
+
+    const connectInfo3 = await callDaemon('/connect', {
+      host: '127.0.0.1',
+      port: 2222,
+      username: 'test',
+      password: 'password'
+    });
+    console.log('Connection established (auto-ID):', connectInfo3);
+    if (!connectInfo3.id.match(/^c\d+$/)) {
+      throw new Error(`Auto ID generation failed! Expected format c1, c2, etc. got: ${connectInfo3.id}`);
+    }
+    await callDaemon('/disconnect', { connectionId: connectInfo3.id });
+
+    // Reconnect test-local so that subsequent tests continue to work
+    await callDaemon('/connect', {
+      host: '127.0.0.1',
+      port: 2222,
+      username: 'test',
+      password: 'password',
+      connectionId: 'test-local'
+    });
+
     console.log('\n--- 2. Testing Connection Listing ---');
     const list = await callDaemon('/connections');
     console.log('Active connections:', list);

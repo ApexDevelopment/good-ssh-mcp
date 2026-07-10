@@ -307,16 +307,44 @@ export class SSHConnectionManager {
       throw new Error(`Username is required to connect to ${host}. Please specify it in the command arguments or your ~/.ssh/config file.`);
     }
 
-    const connId = params.connectionId ?? `${resolvedUsername}@${resolvedHost}:${port}`;
-
-    if (this.connections.has(connId)) {
-      const existing = this.connections.get(connId)!;
+    // 1. If connectionId is explicitly requested, check if it exists
+    if (params.connectionId && this.connections.has(params.connectionId)) {
+      const existing = this.connections.get(params.connectionId)!;
       try {
         existing.info.lastUsedAt = new Date().toISOString();
         return existing.info;
       } catch (e) {
-        this.disconnect(connId);
+        this.disconnect(params.connectionId);
       }
+    }
+
+    // 2. Otherwise, check if we already have an active connection matching host, port, and username
+    for (const [existingId, conn] of this.connections.entries()) {
+      if (
+        conn.info.host === params.host &&
+        conn.info.port === port &&
+        conn.info.username === resolvedUsername
+      ) {
+        if (!params.connectionId || params.connectionId === existingId) {
+          try {
+            conn.info.lastUsedAt = new Date().toISOString();
+            return conn.info;
+          } catch (e) {
+            this.disconnect(existingId);
+          }
+        }
+      }
+    }
+
+    // 3. Determine the connection ID
+    let connId = params.connectionId;
+    if (!connId) {
+      // Generate a short sequential ID: c1, c2, c3, ...
+      let index = 1;
+      while (this.connections.has(`c${index}`)) {
+        index++;
+      }
+      connId = `c${index}`;
     }
 
     const config: ConnectConfig = {
